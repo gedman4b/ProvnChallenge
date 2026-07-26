@@ -286,6 +286,63 @@ seeing a cruise recommendation from the AI Concierge.
 
 Describe a scenario where an AI coding assistant would give you a plausible but incorrect answer for this type of problem — building an API that enforces partner-specific business rules. Explain specifically how you would catch the error and what you would check before acting on it.
 
+**Scenario: schema presence mistaken for actual enforcement.**
+
+Suppose in v2 I ask an assistant to add a fourth MCP tool —
+`get_similar_members_offers`, say, a "what did similar members book"
+tool — and prompt it with something like "make sure this respects
+partner rules like the other tools do." A very plausible failure mode:
+the assistant adds `partner_id` and `excluded_categories` fields to the
+tool's response schema (`models/schemas.py`), maybe even fetches the
+`PartnerConfig` and includes it in the payload for "transparency," and
+returns offers that *look* correctly scoped in a quick manual test
+because the test member's excluded category happens not to collide with
+what a similarity search would surface. It never actually calls
+`build_recommendations()` — the one function that does cap enforcement,
+category exclusion, and tier-gating (`app/services/
+recommendation_engine.py`). The code compiles, the response shape matches
+every other tool, a docstring says "partner-rule-compliant," and a
+shallow read of the diff looks like the feature was done correctly. The
+rule enforcement is present in the *data model*, not in the *code path* —
+and that distinction is easy for both an LLM and a reviewer skimming a
+diff to miss, because the response object contains the right fields
+either way.
+
+This is exactly the seam this codebase already narrows deliberately:
+`recommendation_orchestrator.py` is written as the *one* place that
+derives `partner_id` and hands the member + partner config to the engine,
+specifically so a second, parallel enforcement path doesn't get
+hand-rolled later. But that only holds as an invariant if every new tool
+is actually routed through the orchestrator — nothing in the type system
+stops a new tool from calling the offers catalog or a raw member client
+directly and building its own response.
+
+**How I'd catch it:**
+- Never trust "the response has an `applied_rules` field" as evidence of
+  enforcement. Grep the diff for a call into `build_recommendations` /
+  `build_generic_recommendations` (or, post-refactor, the orchestrator).
+  If a new code path touches offers/recommendations without going through
+  that function, that's the review-blocking finding regardless of how
+  correct the output looks.
+- Write the adversarial test first, not after: construct a member whose
+  history/similar-members set is *only* satisfiable by an excluded
+  category or an over-cap count for their partner (mirroring
+  `test_excluded_category_never_appears` and the cap tests in
+  `tests/test_recommendation_engine.py`), and assert on the actual
+  returned offers — not on the presence of a rules field in the response.
+  A schema-only bug passes every test that only checks shape.
+- Check it against a partner with a *non-default*, maximally restrictive
+  config (`meridian-points`: cap 1, cruise + package excluded) rather
+  than the permissive one (`voyage-elite`) — a permissive partner won't
+  expose a missing-enforcement bug because nothing gets filtered either
+  way.
+- Ask "what happens if this runs against `voyage-elite` first and
+  `meridian-points` second" — an assistant hand-rolling its own filtering
+  logic instead of reusing the engine is exactly where partner-config
+  values leak or get cached/reused incorrectly across requests, which
+  the existing partner-fail-safe tests are designed to catch for the
+  *existing* tools but wouldn't automatically cover a new one.
+
 ## AWS deployment mapping (existing infrastructure only)
 
 No new infrastructure platform. Everything here is a container behind the
