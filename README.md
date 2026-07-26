@@ -284,7 +284,7 @@ seeing a cruise recommendation from the AI Concierge.
 
 ### Part B2 - Required Reasoning Question
 
-Describe a scenario where an AI coding assistant would give you a plausible but incorrect answer for this type of problem — building an API that enforces partner-specific business rules. Explain specifically how you would catch the error and what you would check before acting on it.
+Describe a scenario where an AI coding assistant would give you a plausible but incorrect answer for this type of problem, building an API that enforces partner-specific business rules. Explain specifically how you would catch the error and what you would check before acting on it.
 
 **Scenario: schema presence mistaken for actual enforcement.**
 
