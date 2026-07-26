@@ -11,12 +11,17 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router as rest_router
 from app.logging_config import configure_logging, get_logger
 from app.mcp_server import mcp
+
+STATIC_DIR = Path(__file__).parent / "static"
 
 configure_logging()
 logger = get_logger(__name__)
@@ -39,3 +44,10 @@ app = FastAPI(
 )
 app.include_router(rest_router)
 app.mount("/mcp", mcp_app)
+app.mount("/ui", StaticFiles(directory=STATIC_DIR, html=True), name="ui")
+
+
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """Demo frontend lives at /ui — redirect the bare root there for convenience."""
+    return RedirectResponse(url="/ui/")

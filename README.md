@@ -431,7 +431,21 @@ curl localhost:8000/v1/recommendations/m-1001
 # partner-rule scenario in the mock data (capped, unlimited+excluded,
 # fail-safe fallback, cold-start, unknown member)
 .venv/bin/python scripts/mcp_smoke_test.py
+
+# or open the browser demo (same REST endpoints, visually)
+open http://localhost:8000/ui/
 ```
+
+**Browser demo** (`app/static/index.html`, served by FastAPI at `/ui`,
+`/` redirects there): pick one of the 8 mock members and it walks the same
+three calls a partner concierge agent would make — `GET /v1/members/{id}`
+→ `GET /v1/partners/{id}/rules` → `GET /v1/recommendations/{id}` — showing
+the fetched partner rules, the returned recommendations, and the
+`applied_rules` metadata that explains them. Pick `m-1003` to see cruise
+history excluded by `globalfirst-travel`'s rules, or `m-1007` to see the
+fail-safe fallback (unregistered partner → cap 1, cruise+package excluded,
+`degraded: true`) rendered live. Demo-only, not part of the graded API
+surface — vanilla HTML/JS, no build step, no framework.
 
 Test coverage (`tests/`): recommendation-engine rule enforcement
 (`test_recommendation_engine.py`), the circuit breaker and retry semantics

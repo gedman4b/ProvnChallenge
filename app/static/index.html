@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI Concierge — Recommendation Flow Demo</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --border: #e0e3e8;
+    --text: #1a1d23;
+    --muted: #6b7280;
+    --accent: #2f5aff;
+    --ok: #1a7f37;
+    --warn: #9a6700;
+    --bad: #b3261e;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --panel: #1c1f26;
+      --border: #2c3038;
+      --text: #e8eaed;
+      --muted: #9aa1ac;
+      --accent: #6f92ff;
+      --ok: #4ade80;
+      --warn: #eab308;
+      --bad: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.45;
+  }
+  main {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 2rem 1.25rem 4rem;
+  }
+  header h1 {
+    font-size: 1.35rem;
+    margin: 0 0 0.25rem;
+  }
+  header p {
+    color: var(--muted);
+    margin: 0 0 1.5rem;
+    font-size: 0.92rem;
+    max-width: 60ch;
+  }
+  .controls {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    flex-wrap: wrap;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 1.5rem;
+  }
+  select, button {
+    font: inherit;
+    font-size: 0.9rem;
+    padding: 0.5rem 0.7rem;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+  }
+  button {
+    background: var(--accent);
+    color: #fff;
+    border-color: transparent;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .controls .hint { color: var(--muted); font-size: 0.82rem; }
+
+  .step {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.15rem;
+    margin-bottom: 1rem;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+  }
+  .step.shown { opacity: 1; transform: none; }
+  .step h2 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin: 0 0 0.6rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .step h2 .call {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 0.1rem 0.4rem;
+    color: var(--accent);
+  }
+  .row { display: flex; gap: 0.4rem 1.2rem; flex-wrap: wrap; margin: 0.15rem 0; }
+  .row .k { color: var(--muted); font-size: 0.82rem; min-width: 8rem; }
+  .row .v { font-size: 0.9rem; }
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+  }
+  .badge.ok { color: var(--ok); }
+  .badge.warn { color: var(--warn); }
+  .badge.bad { color: var(--bad); }
+
+  ul.history, ul.recs { list-style: none; margin: 0.4rem 0 0; padding: 0; }
+  ul.history li {
+    padding: 0.3rem 0;
+    border-top: 1px dashed var(--border);
+    font-size: 0.87rem;
+  }
+  ul.history li:first-child { border-top: none; }
+  ul.history li .cat { color: var(--muted); font-size: 0.78rem; }
+
+  .rec-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.7rem 0.85rem;
+    margin-bottom: 0.6rem;
+  }
+  .rec-card .title { font-weight: 600; font-size: 0.94rem; }
+  .rec-card .dest { color: var(--muted); font-size: 0.82rem; }
+  .rec-card .reason {
+    margin-top: 0.35rem;
+    font-size: 0.85rem;
+    color: var(--accent);
+  }
+  .rec-card .desc { font-size: 0.85rem; margin-top: 0.2rem; }
+
+  .degraded-banner {
+    background: color-mix(in srgb, var(--warn) 15%, transparent);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    border-radius: 8px;
+    padding: 0.6rem 0.8rem;
+    font-size: 0.85rem;
+    margin-bottom: 0.8rem;
+  }
+  .empty { color: var(--muted); font-size: 0.87rem; }
+  .error-banner {
+    background: color-mix(in srgb, var(--bad) 15%, transparent);
+    border: 1px solid var(--bad);
+    color: var(--bad);
+    border-radius: 8px;
+    padding: 0.7rem 0.9rem;
+    font-size: 0.88rem;
+    margin-bottom: 1rem;
+  }
+  footer {
+    margin-top: 2rem;
+    color: var(--muted);
+    font-size: 0.78rem;
+  }
+  footer a { color: inherit; }
+  code { font-family: var(--mono); font-size: 0.85em; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>AI Concierge — Recommendation Flow Demo</h1>
+    <p>
+      Minimal frontend over the same REST endpoints the MCP tools call
+      through (<a href="https://github.com/gedman4b/ProvnChallenge" style="color:inherit">README</a>).
+      Pick a mock member and run the flow: fetch their profile, fetch their
+      partner's rules, then fetch enforced recommendations — the same three
+      calls an embedded partner concierge agent would make.
+    </p>
+  </header>
+
+  <div class="controls">
+    <label for="member-select" class="hint">Member</label>
+    <select id="member-select"></select>
+    <button id="run-btn">Run recommendation flow</button>
+    <span id="status" class="hint"></span>
+  </div>
+
+  <div id="error" class="error-banner" style="display:none"></div>
+
+  <section id="step-profile" class="step">
+    <h2>1. Member profile <span class="call">GET /v1/members/{id}</span></h2>
+    <div id="profile-body" class="empty">Not run yet.</div>
+  </section>
+
+  <section id="step-rules" class="step">
+    <h2>2. Partner rules <span class="call">GET /v1/partners/{id}/rules</span></h2>
+    <div id="rules-body" class="empty">Not run yet.</div>
+  </section>
+
+  <section id="step-recs" class="step">
+    <h2>3. Recommendations <span class="call">GET /v1/recommendations/{id}</span></h2>
+    <div id="recs-body" class="empty">Not run yet.</div>
+  </section>
+
+  <footer>
+    Demo-only page, not part of the graded API surface — served as a
+    static file by the same FastAPI app (<code>app/static/index.html</code>).
+    <code>partner_id</code> is never chosen here; it's read back from step 1
+    and used as-is for steps 2 and 3, matching the service's rule that
+    partner is always derived server-side from the member record.
+  </footer>
+</main>
+
+<script>
+const MEMBERS = [
+  { id: "m-1001", label: "m-1001 — gold, suntrust-rewards" },
+  { id: "m-1002", label: "m-1002 — silver, suntrust-rewards" },
+  { id: "m-1003", label: "m-1003 — platinum, globalfirst-travel (cruise history)" },
+  { id: "m-1004", label: "m-1004 — silver, globalfirst-travel" },
+  { id: "m-1005", label: "m-1005 — gold, meridian-points (cap 1)" },
+  { id: "m-1006", label: "m-1006 — platinum, voyage-elite (unlimited)" },
+  { id: "m-1007", label: "m-1007 — gold, unregistered partner (fail-safe fallback)" },
+  { id: "m-1008", label: "m-1008 — silver, suntrust-rewards (cold start, no history)" },
+];
+
+const select = document.getElementById("member-select");
+const runBtn = document.getElementById("run-btn");
+const statusEl = document.getElementById("status");
+const errorEl = document.getElementById("error");
+
+for (const m of MEMBERS) {
+  const opt = document.createElement("option");
+  opt.value = m.id;
+  opt.textContent = m.label;
+  select.appendChild(opt);
+}
+
+function showStep(id) {
+  document.getElementById(id).classList.add("shown");
+}
+function resetSteps() {
+  for (const id of ["step-profile", "step-rules", "step-recs"]) {
+    document.getElementById(id).classList.remove("shown");
+  }
+  document.getElementById("profile-body").innerHTML = '<div class="empty">Not run yet.</div>';
+  document.getElementById("rules-body").innerHTML = '<div class="empty">Not run yet.</div>';
+  document.getElementById("recs-body").innerHTML = '<div class="empty">Not run yet.</div>';
+  errorEl.style.display = "none";
+}
+
+async function getJSON(url) {
+  const res = await fetch(url);
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const detail = body && body.detail ? body.detail : res.statusText;
+    throw new Error(`${res.status} on ${url}: ${JSON.stringify(detail)}`);
+  }
+  return body;
+}
+
+function renderProfile(profile) {
+  const historyItems = profile.travel_history.length
+    ? profile.travel_history.map(b =>
+        `<li><span class="cat">${b.booking_type}</span> — ${b.destination} (${b.start_date} → ${b.end_date})</li>`
+      ).join("")
+    : '<li class="empty">No travel history (cold start).</li>';
+
+  document.getElementById("profile-body").innerHTML = `
+    <div class="row"><span class="k">Member ID</span><span class="v">${profile.member_id}</span></div>
+    <div class="row"><span class="k">Loyalty tier</span><span class="v">${profile.loyalty_tier}</span></div>
+    <div class="row"><span class="k">Partner ID</span><span class="v">${profile.partner_id}</span></div>
+    <div class="row"><span class="k">Recent history</span></div>
+    <ul class="history">${historyItems}</ul>
+  `;
+}
+
+function renderRules(rules) {
+  const fallbackBadge = rules.is_fallback
+    ? '<span class="badge warn">FAIL-SAFE FALLBACK (partner unreachable/unregistered)</span>'
+    : '<span class="badge ok">authoritative</span>';
+  document.getElementById("rules-body").innerHTML = `
+    <div class="row"><span class="k">Partner</span><span class="v">${rules.display_name} (${rules.partner_id})</span></div>
+    <div class="row"><span class="k">Source</span><span class="v">${fallbackBadge}</span></div>
+    <div class="row"><span class="k">Max recommendations</span><span class="v">${rules.max_recommendations === null ? "unlimited" : rules.max_recommendations}</span></div>
+    <div class="row"><span class="k">Excluded categories</span><span class="v">${rules.excluded_categories.length ? rules.excluded_categories.join(", ") : "none"}</span></div>
+  `;
+}
+
+function renderRecs(data) {
+  let html = "";
+  if (data.degraded) {
+    html += `<div class="degraded-banner">Degraded response — ${data.degraded_reason || "member data unavailable"}. Showing generic, still partner-rule-compliant picks.</div>`;
+  }
+  if (!data.recommendations.length) {
+    html += '<div class="empty">No recommendations matched (e.g. all history categories excluded).</div>';
+  } else {
+    html += data.recommendations.map(r => `
+      <div class="rec-card">
+        <div class="title">${r.title}</div>
+        <div class="dest">${r.destination} · ${r.category}</div>
+        <div class="desc">${r.description}</div>
+        <div class="reason">${r.reason}</div>
+      </div>
+    `).join("");
+  }
+  html += `<div class="row" style="margin-top:0.6rem"><span class="k">applied_rules</span><span class="v"><code>${JSON.stringify(data.applied_rules)}</code></span></div>`;
+  document.getElementById("recs-body").innerHTML = html;
+}
+
+async function runFlow() {
+  const memberId = select.value;
+  resetSteps();
+  runBtn.disabled = true;
+  statusEl.textContent = "Running…";
+  try {
+    showStep("step-profile");
+    const profile = await getJSON(`/v1/members/${memberId}`);
+    renderProfile(profile);
+
+    showStep("step-rules");
+    const rules = await getJSON(`/v1/partners/${profile.partner_id}/rules`);
+    renderRules(rules);
+
+    showStep("step-recs");
+    const recs = await getJSON(`/v1/recommendations/${memberId}`);
+    renderRecs(recs);
+
+    statusEl.textContent = "Done.";
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.style.display = "block";
+    statusEl.textContent = "Failed.";
+  } finally {
+    runBtn.disabled = false;
+  }
+}
+
+runBtn.addEventListener("click", runFlow);
+</script>
+</body>
+</html>
