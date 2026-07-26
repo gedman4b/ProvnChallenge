@@ -20,17 +20,20 @@ uv venv .venv && uv pip install -p .venv -e ".[dev]"
 
 ## Contents
 
-- [Architecture](#architecture)
+- [Section A — Architecture & Trade-offs](#section-a--architecture--trade-offs)
 - [MCP tool surface](#mcp-tool-surface)
 - [Partner rule enforcement](#partner-rule-enforcement)
 - [Reliability & on-call design](#reliability--on-call-design)
+- [Section B — Production Readiness & Incident Response](#section-b--production-readiness--incident-response)
 - [AWS deployment mapping](#aws-deployment-mapping-existing-infrastructure-only)
 - [Four-week delivery plan](#four-week-delivery-plan)
 - [What's explicitly out of scope](#whats-explicitly-out-of-scope-for-v1)
 - [Running & verifying](#running--verifying)
-- [Critical evaluation of AI-assisted development](#critical-evaluation-of-ai-assisted-development)
+- [Section C — AI Usage Log](#section-c--ai-usage-log-mandatory)
 
-## Architecture
+## Section A — Architecture & Trade-offs
+
+### Architecture Overview
 
 One process, two transports, one business-logic core. The MCP layer and the
 REST layer are both thin wrappers around the same `RecommendationOrchestrator`
@@ -63,6 +66,53 @@ Key files:
 e.g. `HttpMemberDataClient(MemberDataClient)` that calls the real API, wire
 it in `app/dependencies.py` instead of `MockMemberDataClient`. Nothing in
 the orchestrator, engine, or either transport changes.
+
+### Design Trade-offs
+
+**1. Deterministic rule-based ranking instead of an ML- or LLM-scored
+ranker.** A learned ranker would likely surface subtler affinities, but it
+turns "why did member X see offer Y" into a question that needs a model
+re-run — and possibly non-reproducible output — to answer, which is a bad
+property for a service the team is on call for. The rule-based engine
+(`recommendation_engine.py`) is deterministic and cheap to unit test
+exhaustively. Trade-off accepted: less sophisticated personalization in v1,
+in exchange for something on-call can fully explain from the
+`applied_rules` field alone, with a clean seam to swap in a scoring model
+later without touching rule enforcement.
+
+**2. One shared process for both MCP and REST, instead of a separate MCP
+gateway service.** Running FastMCP and FastAPI in the same ASGI app means
+one deploy pipeline and one set of circuit breakers/caches — MCP and REST
+callers see identical downstream health, and there's less v1 infrastructure
+to stand up in four weeks. The cost: both transports share a failure domain
+and scale together, so a load spike on one affects latency on the other.
+Accepted for v1 given the expected traffic; splitting them into two ECS
+services in front of the same client interfaces is a mechanical change
+later if their load profiles diverge.
+
+### Handling Partner Configuration Changes
+
+If a partner changes their `max_recommendations` cap or adds a new
+`excluded_categories` entry (for a category this service already models),
+**no code change or deploy is required.** `PartnerConfig` is a generic
+schema (`max_recommendations: int | None`, `excluded_categories:
+list[BookingType]`), so `build_recommendations()` already handles whatever
+values the partner config service returns. Propagation is bounded by the
+cache — up to `ARRIVIA_PARTNER_CONFIG_CACHE_TTL_SECONDS` (5 min default) —
+since we deliberately cache to avoid hammering a service we don't own on
+every request.
+
+Two things *would* require a change:
+- **A brand-new booking-type category** (e.g. "insurance") not already in
+  the `BookingType` enum — needs a code change (enum, offers catalog,
+  engine) and a deploy, since an exclusion list can only reference
+  categories this service already models. A real limitation of a closed
+  enum, worth flagging rather than hiding.
+- **An urgent, can't-wait-for-the-TTL change** (e.g. a compliance-driven
+  exclusion) — v1 has no cache-invalidation path (no webhook, no admin
+  flush endpoint), so it would sit behind the TTL. Known gap; a v2 fix is
+  either an admin cache-bust endpoint or subscribing to a change
+  notification if the partner config service ever offers one.
 
 ## MCP tool surface
 
@@ -186,6 +236,59 @@ breaker opened on the 5th consecutive failure (the configured threshold)
 and `/ready` flipped to 503 immediately after, with `/health` staying `200`
 throughout.
 
+## Section B — Production Readiness & Incident Response
+
+### Incident Runbook Entry: cruise offers shown despite a partner exclusion
+
+**Symptom:** a member on a partner whose config excludes cruises reports
+seeing a cruise recommendation from the AI Concierge.
+
+**Diagnose**
+1. Get the member's `member_id` and, from the report or
+   `GET /v1/members/{member_id}`, their `partner_id`.
+2. Call `GET /v1/partners/{partner_id}/rules` (or the
+   `list_partner_recommendation_rules` MCP tool) directly against
+   production — confirm what this service currently believes the partner's
+   rules are, and check `is_fallback`.
+3. Search CloudWatch Logs Insights for that `partner_id` around the report
+   time for `partner_config_fallback_applied` / `partner_config_serving_stale`
+   — if the partner recently changed their config and we were still inside
+   the cache TTL/staleness window, this is expected transient behavior, not
+   a bug.
+4. Reproduce directly: call `get_travel_recommendations` for the member and
+   inspect `applied_rules.excluded_categories` in the response.
+
+**Confirm root cause**
+- `excluded_categories` correctly includes `"cruise"` but a cruise offer is
+  still in `recommendations` → the bug is in the filter step of
+  `build_recommendations()` (`app/services/recommendation_engine.py`) —
+  likely a miscategorized offer in the catalog or a comparison bug.
+- `excluded_categories` does **not** include `"cruise"` → the bug is
+  upstream of the engine: either the partner config service itself doesn't
+  have the exclusion set (escalate to its owners — we can only read it, not
+  fix it there), or our client is serving a stale/fallback config
+  incorrectly. Pull the exact `request_id` from the member's session log
+  line to see precisely which config was in effect at that moment.
+
+**Resolve**
+- Engine bug: hotfix the filter, add a regression test mirroring
+  `test_excluded_category_never_appears` for that partner, deploy.
+- Stale-cache related: temporarily lower
+  `ARRIVIA_PARTNER_CONFIG_CACHE_TTL_SECONDS` via SSM — no deploy needed.
+- Upstream data issue: this service can't fix it directly (read-only
+  constraint) — escalate to the partner config service owners, and confirm
+  we're at least *surfacing* the discrepancy accurately in the meantime.
+- Post-incident: verify/add a CloudWatch alarm on the
+  `partner_config_fallback_applied` / `serving_stale` rate for that partner
+  so this pages before a member notices next time.
+
+### Part B2 — Required Reasoning Question
+
+_Per the prompt's instructions, this question is meant to be answered by
+the engineer directly, without AI assistance, so it is intentionally left
+blank here rather than filled in by Claude Code. — Scott, this is yours to
+write._
+
 ## AWS deployment mapping (existing infrastructure only)
 
 No new infrastructure platform. Everything here is a container behind the
@@ -282,44 +385,50 @@ in isolation (`test_resilience.py`), the partner fail-safe/caching policy
 (`test_partner_rules.py`), and MCP tool discovery + invocation end to end
 through an in-process session (`test_mcp_tools.py`).
 
-## Critical evaluation of AI-assisted development
+## Section C — AI Usage Log (Mandatory)
 
-This service was built with Claude Code in an agentic loop, and it's worth
-being specific about where that helped, where it didn't, and what got
-double-checked rather than trusted.
+This service was built with Claude Code in an agentic loop. Three
+representative interactions, in the order they happened:
 
-- **The MCP mount path bug wasn't caught by reading the SDK, it was caught
-  by running it.** Mounting `FastMCP.streamable_http_app()` at `/mcp` in
-  FastAPI produced `/mcp/mcp` and a 404, because the sub-app already serves
-  at its own `streamable_http_path` (default `/mcp`). The type signatures
-  gave no hint of this. It only surfaced by actually starting the server and
-  connecting a real MCP client — which is why this README's verification
-  section runs live processes and a real client session, not just unit
-  tests against in-process objects. Unit tests alone would have stayed
-  green with the transport silently broken.
-- **The fail-safe-fallback *direction* was a judgment call, not a default.**
-  Nothing in an LLM's default instincts says "when a partner's rules are
-  unreachable, assume the *strictest* interpretation, not the most
-  permissive." That came from reading the constraint ("respect partner
-  rules even if suboptimal") and asking what it implies about *outages*,
-  not just steady-state reads. It's the single most important design
-  decision in this codebase and it required stating explicitly rather than
-  letting a generic "just retry and return an error" pattern happen by
-  default.
-- **Deliberately kept the ranking dumb.** It would have been easy to reach
-  for an embeddings-based or LLM-scored ranking step. Rejected for v1
-  because a rule-based, deterministic engine is something on-call can
-  actually reason about at 2am ("why did member X see offer Y") without
-  re-running a model — explainability was weighted above sophistication.
-- **Read-only tool surface was a scope cut made explicit, not implicit.**
-  It would have been just as easy to add a `book_offer` tool for a flashier
-  demo. Left out deliberately — see
-  [What's out of scope](#whats-explicitly-out-of-scope-for-v1) — because a
-  concierge agent that can take irreversible action needs an authz model
-  this 4-week v1 doesn't have time to get right.
-- **Verified, not assumed, working.** Every scenario described in this
-  README (partner cap, cruise exclusion, fail-safe fallback, cold-start
-  member, unknown member, degraded member-service response, circuit breaker
-  opening and `/ready` flipping to 503) was actually run against the running
-  service during development, not just asserted in prose. `tests/` covers
-  the same scenarios so they stay true as the code changes.
+**1. Architecture & implementation plan**
+- *Asked:* to design the overall service — MCP + REST for a
+  partner-rule-constrained recommendation API, two mocked upstreams, scoped
+  to four weeks, targeting AWS.
+- *Got:* a plan proposing a shared FastAPI+FastMCP process, an
+  interface-based split between the two mocked clients, a fail-safe-on-outage
+  policy for partner config, and a week-by-week delivery breakdown.
+- *Kept / changed:* kept the structure almost entirely — it matched how I'd
+  have scoped it myself. The one thing I pushed on explicitly was making
+  sure the "respect partner rules even if suboptimal" constraint was read to
+  also cover *outages* (fail strict, not fail open) — that implication is
+  easy for a plan to get backwards by default, and it became the single
+  most important decision in the codebase (see
+  [Reliability & on-call design](#reliability--on-call-design)).
+
+**2. Mounting the MCP server under FastAPI**
+- *Asked:* to wire the MCP tool server and the REST API into one ASGI app.
+- *Got:* `app.mount("/mcp", mcp.streamable_http_app())` — a reasonable-
+  looking pattern based on typical FastMCP usage.
+- *Rejected / changed:* it didn't work. `streamable_http_app()` serves at
+  its own internal `/mcp` path by default, so mounting it *at* `/mcp`
+  produced `/mcp/mcp`, and every tool call 404'd. This was caught by
+  actually running the server and connecting a real MCP client, not by
+  trusting that the code looked right — the fix was setting
+  `streamable_http_path="/"` on the FastMCP instance before mounting. Kept
+  the fix; the broader lesson was procedural — for a new SDK integration,
+  "it runs without errors" isn't the bar, a live client round-trip is.
+
+**3. Test suite for partner-config caching**
+- *Asked:* for pytest coverage of the partner-config cache/fallback policy,
+  including "a known partner's config is cached across calls."
+- *Got:* a test that monkeypatches `lookup_partner_config` and asserts it's
+  called exactly once across two back-to-back requests.
+- *Checked before trusting it:* whether the patch actually targeted the
+  reference the client code uses. `partner_config_client.py` does
+  `from app.mocks.partner_configs import lookup_partner_config`, which binds
+  a local name — patching the *origin* module's attribute would not have
+  touched that bound name, and the test would have passed for the wrong
+  reason (silently never calling the un-patched real function). Fixed the
+  patch target to `app.services.partner_config_client.lookup_partner_config`,
+  then confirmed the assertion was meaningful by temporarily setting the
+  cache TTL to 0 and watching the test fail, before reverting.
