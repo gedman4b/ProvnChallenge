@@ -290,7 +290,7 @@ Describe a scenario where an AI coding assistant would give you a plausible but 
 
 Suppose in v2 I ask an assistant to add a fourth MCP tool,
 `get_similar_members_offers`, say, a "what did similar members book"
-tool — and prompt it with something like "make sure this respects
+tool, and prompt it with something like "make sure this respects
 partner rules like the other tools do." A very plausible failure mode:
 the assistant adds `partner_id` and `excluded_categories` fields to the
 tool's response schema (`models/schemas.py`), maybe even fetches the
