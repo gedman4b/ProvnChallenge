@@ -284,10 +284,7 @@ seeing a cruise recommendation from the AI Concierge.
 
 ### Part B2 — Required Reasoning Question
 
-_Per the prompt's instructions, this question is meant to be answered by
-the engineer directly, without AI assistance, so it is intentionally left
-blank here rather than filled in by Claude Code. — Scott, this is yours to
-write._
+Describe a scenario where an AI coding assistant would give you a plausible but incorrect answer for this type of problem — building an API that enforces partner-specific business rules. Explain specifically how you would catch the error and what you would check before acting on it.
 
 ## AWS deployment mapping (existing infrastructure only)
 
